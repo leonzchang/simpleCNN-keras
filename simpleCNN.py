@@ -7,8 +7,8 @@ from keras.layers import Dropout
 from keras.regularizers import l2
 from keras.preprocessing.image import ImageDataGenerator
 from keras.utils import np_utils
-import random
 from keras.preprocessing.image import image
+import random
 import numpy as np
 import os
 import argparse
@@ -67,20 +67,34 @@ class simpleCNN:
             epochs=10,
             validation_data=test_DAset,
             validation_steps=30)
+
+        # transferLearning New model
+        model5 = self.transferLearning(model4)
+        model5.fit_generator(
+            training_DAset,
+            steps_per_epoch=30,
+            epochs=10,
+            validation_data=test_DAset,
+            validation_steps=30)
         # predict & score
         predict1 = model1.predict(testData)
         predict2 = model2.predict(testData)
         predict3 = model3.predict(testData)
         predict4 = model4.predict(testData)
+        predict5 = model4.predict(testData)
         score1 = self.showAccuracy(predict1, testDataLabel)
         score2 = self.showAccuracy(predict2, testDataLabel)
-        score3 = self.showAccuracy(predict3, testDataLabel)
-        score4 = self.showAccuracy(predict4, testDataLabel)
+        score3 = self.showAccuracy(predict3, testDataLabel, mode=True)
+        score4 = self.showAccuracy(predict4, testDataLabel, mode=True)
+        score5 = self.showAccuracy(predict5, testDataLabel, mode=True)
 
-        print("accuracy(without tunning): ", score1)
-        print("accuracy(with weight-decay and dropout): ", score2)
-        print("accuracy(with data augmentation ): ", score3)
-        print("accuracy(with data augmentation and weight-decay and dropout ): ", score4)
+        print(training_DAset.class_indices)
+
+        print("model1 accuracy(without tunning): ", score1)
+        print("model2 accuracy(with weight-decay, dropout): ", score2)
+        print("model3 accuracy(with data augmentation ): ", score3)
+        print("model4 accuracy(with data augmentation, weight-decay, dropout ): ", score4)
+        print("model5 accuracy(with data augmentation, weight-decay, dropout, transfer learning): ", score5)
 
     def __del__(self):
         print("object deleted")
@@ -101,7 +115,9 @@ class simpleCNN:
                     if not img.startswith("."):
                         imgPath = subFolder+'/'+img
                         dataImgPath.append(imgPath)
-
+        #load order will change label order
+        temp = sorted(temp, key=int)
+        print(temp)
         random.shuffle(dataImgPath)
         for path in dataImgPath:
             img = image.load_img(path)
@@ -111,7 +127,6 @@ class simpleCNN:
             for index in range(0, len(temp)):
                 if label == temp[index]:
                     metaDataLabel.append(index)
-
         return metaData, metaDataLabel
 
     def setModel(self, row, column, categories, activation_function, regularization, drop):
@@ -124,7 +139,7 @@ class simpleCNN:
         model.add(MaxPooling2D(pool_size=(2, 2)))
         # convolution
         model.add(Convolution2D(
-            64, 3, 3, activation='relu', kernel_regularizer=l2(regularization), bias_regularizer=l2(regularization)))
+            32, 3, 3, activation='relu', kernel_regularizer=l2(regularization), bias_regularizer=l2(regularization)))
         # pooling
         model.add(MaxPooling2D(pool_size=(2, 2)))
         # flattening
@@ -148,30 +163,83 @@ class simpleCNN:
             rescale=1./255,
             shear_range=0.2,
             zoom_range=0.2,
+            rotation_range=20,
             horizontal_flip=True)
         test_datagen = ImageDataGenerator(rescale=1./255)
 
         training_set = train_datagen.flow_from_directory(
             trainDataPath,
-            target_size=(128, 128),
+            target_size=(self.img_row, self.img_column),
             batch_size=32,
             class_mode='categorical')
         test_set = test_datagen.flow_from_directory(
             testDataPath,
-            target_size=(128, 128),
+            target_size=(self.img_row, self.img_column),
             batch_size=32,
             class_mode='categorical')
 
         return training_set, test_set
 
-    def showAccuracy(self, predict, answer):
+    def transferLearning(self, pretrainedModel):
+        base_model = pretrainedModel
+        tfmodel = Sequential()
+        # save only 4 layers from the pretrainedModel from the start
+        for i in range(0, len(base_model.layers)-4):
+            layer = base_model.layers[i]
+            layer.trainable = False
+            tfmodel.add(layer)
+
+        tfmodel.add(Convolution2D(
+            32, 3, 3, activation='relu', name='extraConv'))
+        # pooling
+        tfmodel.add(MaxPooling2D(pool_size=(2, 2), name='extraMP'))
+        # flattening
+        tfmodel.add(Flatten())
+
+        tfmodel.add(Dropout(self.drop))
+        # fully connection
+        tfmodel.add(Dense(output_dim=128, activation='relu'))
+        # output layer using softmax activation fuction beacuse we have 3 categories
+        tfmodel.add(Dense(output_dim=self.categories,
+                          activation=self.af))
+        # compile CNN  loss=>categorical_crossentropy  beacuse we have 3 categories
+        tfmodel.compile(optimizer='adam', loss='categorical_crossentropy',
+                        metrics=['accuracy'])
+        tfmodel.summary()
+        return tfmodel
+
+    def showAccuracy(self, predict, answer, mode=False):
         predict = np.argmax(predict, axis=1)
         score = 0
-        for index in range(0, len(predict)):
-            if predict[index] == answer[index]:
-                score += 1
-        accuracy = score / len(predict)
-        return accuracy
+        # data augumentation label{'100': 0, '1000': 1, '500': 2}
+        if mode:
+            for index in range(0, len(predict)):
+                if predict[index] == 1:
+                    predict[index] = 2
+                    if predict[index] == answer[index]:
+                        score += 1
+                        continue
+                if predict[index] == 2:
+                    predict[index] = 1
+                    if predict[index] == answer[index]:
+                        score += 1
+                        continue
+                if predict[index] == answer[index]:
+                    score += 1
+            accuracy = score / len(predict)
+            print(predict)
+            print(answer)
+
+            return accuracy
+        # else label {'100': 0, '1000': 2, '500': 1}
+        else:
+            for index in range(0, len(predict)):
+                if predict[index] == answer[index]:
+                    score += 1
+            accuracy = score / len(predict)
+            print(predict)
+            print(answer)
+            return accuracy
 
 
 def process_command():
